@@ -1,0 +1,20 @@
+name: Join the study plan
+description: Request write access to the private senior backend study plan repository.
+title: Join request
+labels: [join-request]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Submit this form to request write access to `Walidic/senior-backend-study-plan`.
+        Walidic reviews each request. After Walidic approves it, GitHub emails you an
+        invitation. The invitation expires after 7 days.
+
+        The invitation goes to the GitHub account that submits this form.
+  - type: input
+    id: name
+    attributes:
+      label: Your name
+      description: Walidic uses your name to recognize your request.
+    validations:
+      required: true

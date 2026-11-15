@@ -1,0 +1,94 @@
+# Invites approved requesters to the private study plan repository.
+#
+# A join request is an issue opened from the `join.yml` issue form. The repository
+# owner answers it with a comment that starts with `/approve` or `/deny`. On
+# `/approve`, the workflow adds the issue author as a collaborator on TARGET_REPO,
+# and GitHub emails them an invitation.
+#
+# Requires the `INVITE_TOKEN` secret: a fine-grained personal access token with
+# Administration (read and write) on TARGET_REPO only.
+name: Join requests
+
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write
+
+env:
+  TARGET_REPO: Walidic/senior-backend-study-plan
+
+jobs:
+  acknowledge:
+    if: >-
+      github.event_name == 'issues' &&
+      contains(github.event.issue.labels.*.name, 'join-request')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reply to the requester
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE: ${{ github.event.issue.number }}
+          REQUESTER: ${{ github.event.issue.user.login }}
+        run: |
+          gh issue comment "$ISSUE" --body "Thanks, @$REQUESTER. Your request is waiting for approval. After approval, GitHub emails you an invitation to \`$TARGET_REPO\`."
+
+  decide:
+    # Only the repository owner can approve or deny. Untrusted text such as the
+    # comment body reaches the shell through environment variables, never through
+    # `${{ }}` interpolation in the script.
+    if: >-
+      github.event_name == 'issue_comment' &&
+      !github.event.issue.pull_request &&
+      github.event.issue.state == 'open' &&
+      contains(github.event.issue.labels.*.name, 'join-request') &&
+      github.event.comment.user.login == github.repository_owner &&
+      (startsWith(github.event.comment.body, '/approve') ||
+       startsWith(github.event.comment.body, '/deny'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Invite or decline the requester
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          INVITE_TOKEN: ${{ secrets.INVITE_TOKEN }}
+          COMMAND: ${{ github.event.comment.body }}
+          ISSUE: ${{ github.event.issue.number }}
+          REQUESTER: ${{ github.event.issue.user.login }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$COMMAND" == /deny* ]]; then
+            gh issue close "$ISSUE" --reason "not planned" \
+              --comment "This request was declined."
+            exit 0
+          fi
+
+          if [[ -z "$INVITE_TOKEN" ]]; then
+            gh issue comment "$ISSUE" --body "Invite failed: the \`INVITE_TOKEN\` secret isn't set."
+            exit 1
+          fi
+
+          code=$(curl -sS -o response.json -w '%{http_code}' -X PUT \
+            -H "Authorization: Bearer $INVITE_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            -d '{"permission":"push"}' \
+            "https://api.github.com/repos/$TARGET_REPO/collaborators/$REQUESTER")
+
+          case "$code" in
+            201)
+              msg="@$REQUESTER, your invitation is sent. Accept it within 7 days at https://github.com/$TARGET_REPO/invitations, then follow the quickstart in the README." ;;
+            204)
+              msg="@$REQUESTER already has access to \`$TARGET_REPO\`." ;;
+            *)
+              cat response.json
+              gh issue comment "$ISSUE" --body "Invite failed with HTTP $code. See the workflow log."
+              exit 1 ;;
+          esac
+
+          gh issue close "$ISSUE" --reason completed --comment "$msg"
